@@ -43,6 +43,13 @@ def _parse_current_user(current_user: Optional[str]) -> dict:
             return {"sub": int(raw), "username": f"user{raw}", "roles": ["student"]}
         data = json.loads(raw)
         if isinstance(data, dict):
+            sub_value = data.get("sub", 0)
+            if isinstance(sub_value, str) and sub_value.isdigit():
+                data["sub"] = int(sub_value)
+            elif isinstance(sub_value, int):
+                data["sub"] = sub_value
+            else:
+                data["sub"] = 0
             return data
     except Exception:
         pass
