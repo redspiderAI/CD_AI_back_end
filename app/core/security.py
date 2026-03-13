@@ -50,7 +50,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_access_token(token: str) -> Optional[dict]:
     """解码访问令牌"""
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        secret_key = settings.SECRET_KEY.get_secret_value()
+        payload = jwt.decode(token, secret_key, algorithms=[settings.ALGORITHM])
         return payload
     except InvalidTokenError:
         return None
