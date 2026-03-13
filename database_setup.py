@@ -50,6 +50,21 @@ DEFAULT_DB_URL = os.getenv(
 )
 
 
+ACCOUNT_MAPPING_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS `account_mapping` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键ID',
+    `virtual_account` VARCHAR(128) NOT NULL COMMENT '虚拟账号，用于映射真实账号',
+    `real_user_id` BIGINT UNSIGNED NOT NULL COMMENT '真实用户ID',
+    `real_user_type` ENUM('student','teacher','admin') NOT NULL COMMENT '真实用户类型',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uniq_virtual_account` (`virtual_account`),
+    KEY `idx_real_user` (`real_user_id`, `real_user_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='虚拟账号映射表';
+"""
+
+
 SCHOOLS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS `schools` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键ID',
@@ -407,6 +422,7 @@ def init_db(database_url: str | None = None) -> None:
     try:
         with conn.cursor() as cur:
             for sql in (
+                ACCOUNT_MAPPING_TABLE_SQL,
                 SCHOOLS_TABLE_SQL,
                 DEPARTMENTS_TABLE_SQL,
                 STUDENTS_TABLE_SQL,
@@ -426,7 +442,7 @@ def init_db(database_url: str | None = None) -> None:
             ):
                 cur.execute(sql)
         print(
-            "Tables ensured: schools, departments, students, teachers, admins, file_records, groups, group_members, "
+            "Tables ensured: account_mapping, schools, departments, students, teachers, admins, file_records, groups, group_members, "
             "papers, papers_history, paper_reviews, annotations, ddl_management, templates, "
             "user_messages, operation_logs"
         )
