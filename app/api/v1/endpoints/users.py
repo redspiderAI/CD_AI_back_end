@@ -2031,7 +2031,7 @@ def change_user_role(
         insert_fields = [
             new_id_col, "name", "phone", "email", "password", 
             "school_id", "school_name", "department_id", "department_name", 
-            "group_id", "created_at", "updated_at"
+            "created_at", "updated_at"
         ]
         # 从原用户数据中取值，无则设为NULL
         insert_values = [
@@ -2044,7 +2044,6 @@ def change_user_role(
             original_user_data.get("school_name"),
             original_user_data.get("department_id"),
             original_user_data.get("department_name"),
-            original_user_data.get("group_id"),
             datetime.now(),  # 新的创建时间
             datetime.now()   # 新的更新时间
         ]
