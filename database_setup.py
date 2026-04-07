@@ -267,6 +267,19 @@ CREATE TABLE IF NOT EXISTS `papers` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='论文信息表';
 """
 
+TASKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS `tasks` (
+    `id` INT NOT NULL AUTO_INCREMENT COMMENT '自增ID',
+    `task_id` INT NOT NULL COMMENT '智能体任务ID',
+    `paper_id` INT NOT NULL COMMENT '论文ID',
+    `version` VARCHAR(20) NOT NULL COMMENT '论文版本号',
+    `oss_key` TEXT NOT NULL COMMENT '文件路径',
+    `status` VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uniq_task_id` (`task_id`),
+    UNIQUE KEY `uniq_paper_version` (`paper_id`, `version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='智能体任务表';
+"""
 
 PAPERS_HISTORY_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS `papers_history` (

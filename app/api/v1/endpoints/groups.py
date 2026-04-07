@@ -10,6 +10,7 @@ from app.database import get_connection
 import io
 import zipfile
 from app.services.oss import get_file_from_oss
+import pandas as pd
 
 router = APIRouter()
 
@@ -331,12 +332,12 @@ async def import_groups(
         conn.close()
 
     # 基础文件格式校验
-    supported_formats = ('.tsv', '.csv')
+    supported_formats = ('.tsv', '.csv', '.xlsx')
     if not file.filename.lower().endswith(supported_formats):
         logger.warning(f"用户{current_user['username']}上传非支持文件：{file.filename}，支持格式：{supported_formats}")
         raise HTTPException(
             status_code=400,
-            detail=f"请上传文本表格文件（{', '.join(supported_formats)}）"
+            detail=f"请上传表格文件（{', '.join(supported_formats)}）"
         )
     content = await file.read()
     if not content:
@@ -347,45 +348,77 @@ async def import_groups(
     try:
         import_data = []
         required_cols = {"群组编号", "群组名称", "教师工号", "学生学号", "学生姓名"}
-        delimiter = '\t' if file.filename.lower().endswith('.tsv') else ','  
         
-        try:
-            text_content = content.decode('utf-8-sig')  # 自动处理UTF-8 BOM
-        except UnicodeDecodeError:
+        # 处理不同文件类型
+        if file.filename.lower().endswith('.xlsx'):
+            # 处理Excel文件
+            df = pd.read_excel(io.BytesIO(content))
+            # 转换列名
+            df.columns = [col.strip() for col in df.columns]
+            # 检查必填列
+            missing_cols = required_cols - set(df.columns)
+            if missing_cols:
+                logger.error(f"用户{current_user['username']}上传文件缺少必填列：{missing_cols}")
+                raise HTTPException(status_code=400, detail=f"文件缺少必填列：{', '.join(missing_cols)}")
+            # 处理数据
+            for index, row in df.iterrows():
+                row_dict = row.to_dict()
+                # 检查所有必填列都有值
+                has_all_required = True
+                for col in required_cols:
+                    val = row_dict.get(col)
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        has_all_required = False
+                        break
+                if has_all_required:
+                    import_data.append({
+                        "group_id": str(row_dict["群组编号"]) if row_dict["群组编号"] is not None else "",
+                        "group_name": str(row_dict["群组名称"]) if row_dict["群组名称"] is not None else "",
+                        "teacher_id": str(row_dict["教师工号"]) if row_dict["教师工号"] is not None else "",
+                        "student_id": str(row_dict["学生学号"]) if row_dict["学生学号"] is not None else "",
+                        "student_name": str(row_dict["学生姓名"]) if row_dict["学生姓名"] is not None else ""
+                    })
+        else:
+            # 处理CSV/TSV文件
+            delimiter = '\t' if file.filename.lower().endswith('.tsv') else ','  
+            
             try:
-                text_content = content.decode('gbk')  # 尝试GBK编码
+                text_content = content.decode('utf-8-sig')  # 自动处理UTF-8 BOM
             except UnicodeDecodeError:
-                raise Exception("文件编码不支持，请使用UTF-8或GBK编码保存文件")
-        
-        lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-        if not lines:
-            raise Exception("文件无有效文本内容")
-        
-        headers = [h.strip() for h in lines[0].split(delimiter) if h.strip()]
-        logger.info(f"解析到的表头: {headers}")
-        missing_cols = required_cols - set(headers)
-        if missing_cols:
-            logger.error(f"用户{current_user['username']}上传文件缺少必填列：{missing_cols}")
-            raise HTTPException(status_code=400, detail=f"文件缺少必填列：{', '.join(missing_cols)}")
-        
-        for line_num, line in enumerate(lines[1:], start=2):
-            row_values = [v.strip() for v in line.split(delimiter) if v.strip()]
+                try:
+                    text_content = content.decode('gbk')  # 尝试GBK编码
+                except UnicodeDecodeError:
+                    raise Exception("文件编码不支持，请使用UTF-8或GBK编码保存文件")
+            
+            lines = [line.strip() for line in text_content.split('\n') if line.strip()]
+            if not lines:
+                raise Exception("文件无有效文本内容")
+            
+            headers = [h.strip() for h in lines[0].split(delimiter) if h.strip()]
+            logger.info(f"解析到的表头: {headers}")
+            missing_cols = required_cols - set(headers)
+            if missing_cols:
+                logger.error(f"用户{current_user['username']}上传文件缺少必填列：{missing_cols}")
+                raise HTTPException(status_code=400, detail=f"文件缺少必填列：{', '.join(missing_cols)}")
+            
+            for line_num, line in enumerate(lines[1:], start=2):
+                row_values = [v.strip() for v in line.split(delimiter) if v.strip()]
 
-            row_len = len(row_values)
-            header_len = len(headers)
-            if row_len != header_len:
-                logger.warning(f"第{line_num}行列数异常（表头{header_len}列，当前行{row_len}列），跳过该行")
-                continue
-            row_dict = dict(zip(headers, row_values))
+                row_len = len(row_values)
+                header_len = len(headers)
+                if row_len != header_len:
+                    logger.warning(f"第{line_num}行列数异常（表头{header_len}列，当前行{row_len}列），跳过该行")
+                    continue
+                row_dict = dict(zip(headers, row_values))
 
-            if all([row_dict.get(col) for col in required_cols]):
-                import_data.append({
-                    "group_id": row_dict["群组编号"],
-                    "group_name": row_dict["群组名称"],
-                    "teacher_id": row_dict["教师工号"],
-                    "student_id": row_dict["学生学号"],
-                    "student_name": row_dict["学生姓名"]
-                })
+                if all([row_dict.get(col) for col in required_cols]):
+                    import_data.append({
+                        "group_id": row_dict["群组编号"],
+                        "group_name": row_dict["群组名称"],
+                        "teacher_id": row_dict["教师工号"],
+                        "student_id": row_dict["学生学号"],
+                        "student_name": row_dict["学生姓名"]
+                    })
         
         # 数据清洗结果校验
         if not import_data:

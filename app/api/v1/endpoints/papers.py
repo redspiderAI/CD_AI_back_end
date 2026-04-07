@@ -16,6 +16,7 @@ from app.schemas.document import (
     DDLOut, 
 )
 from app.services.oss import get_file_from_oss, upload_paper_to_storage
+from app.services.audit import submit_audit_task
 from datetime import datetime
 from app.database import get_db
 import pymysql
@@ -241,6 +242,16 @@ async def upload_paper(
                 now,
                 now
             )
+        )
+
+        await submit_audit_task(
+            db,
+            file_content=contents,
+            filename=file.filename,
+            paper_id=paper_id,
+            version=version,
+            oss_key=oss_key,
+            audit_config='{"checks": ["grammar", "plagiarism"]}',
         )
         db.commit()
     except pymysql.MySQLError as e:

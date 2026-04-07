@@ -20,4 +20,4 @@ class AnnotationOut(BaseModel):
     updated_at: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True

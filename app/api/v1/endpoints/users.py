@@ -22,6 +22,7 @@ from app.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import create_access_token, get_password_hash, verify_password
 from loguru import logger
+import pandas as pd
 
 
 def _parse_current_user(current_user: Optional[str]) -> dict:
@@ -85,7 +86,7 @@ class UserBindDepartment(BaseModel):
     department_name: Optional[str] = None 
 
 router = APIRouter()
-SUPPORTED_IMPORT_EXTS = (".csv", ".tsv")
+SUPPORTED_IMPORT_EXTS = (".csv", ".tsv", ".xlsx")
 
 USER_TABLES = {
     "admin": {"table": "admins", "id_col": "admin_id", "role_col": "role"},
@@ -151,7 +152,8 @@ def _fetch_user_for_login(
 
 
 def _normalize_user_type(user_type: str | None) -> str:
-    value = (user_type or "admin").strip().lower()
+    user_type_str = str(user_type) if user_type is not None else "admin"
+    value = user_type_str.strip().lower()
     if value not in USER_TABLES:
         raise HTTPException(status_code=400, detail="user_type 必须为 student/teacher/admin")
     return value
@@ -1355,31 +1357,61 @@ def delete_user(
 @router.post(
     "/import",
     summary="一键导入用户",
-    description="上传 CSV/TSV 文件批量导入用户（列：username,user_type,email,full_name,role,password 可选）"
+    description="上传 CSV/TSV 文件批量导入用户（列：username,user_type,full_name,role,password 可选）"
 )
 async def import_users(file: UploadFile = File(...), db: pymysql.connections.Connection = Depends(get_db)):
     filename = file.filename or ""
     lower_name = filename.lower()
     if not lower_name.endswith(SUPPORTED_IMPORT_EXTS):
-        raise HTTPException(status_code=400, detail="仅支持 .csv 或 .tsv 文件")
+        raise HTTPException(status_code=400, detail=f"仅支持 {', '.join(SUPPORTED_IMPORT_EXTS)} 文件")
 
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="上传文件为空")
 
-    delimiter = "\t" if lower_name.endswith(".tsv") else ","
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        try:
-            text = content.decode("gbk")
-        except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="文件编码仅支持 UTF-8 或 GBK")
-
-    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    rows = []
     required_col = "username"
-    if required_col not in reader.fieldnames:
-        raise HTTPException(status_code=400, detail="文件缺少 username 列")
+    
+    # 处理不同文件类型
+    if lower_name.endswith(('.xlsx', '.xls')):
+        # 处理Excel文件：核心修复1：避免科学计数法，完整保留数字
+        # 读取时指定 dtype=str，强制所有单元格为字符串，彻底解决科学计数法问题
+        df = pd.read_excel(io.BytesIO(content), dtype=str)
+        
+        # 核心修复2：处理列名，避免int类型strip报错
+        df.columns = [
+            str(col).strip() if pd.notna(col) else "" 
+            for col in df.columns
+        ]
+        
+        # 检查必填列
+        if required_col not in df.columns:
+            raise HTTPException(status_code=400, detail="文件缺少 username 列")
+        
+        # 核心修复3：清理所有单元格的空值和空格，确保所有数据为字符串
+        df = df.fillna("").astype(str)
+        for col in df.columns:
+            df[col] = df[col].str.strip()
+        
+        # 转换为字典列表
+        rows = df.to_dict(orient="records")
+    else:
+        # 处理CSV/TSV文件
+        delimiter = "\t" if lower_name.endswith(".tsv") else ","
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                text = content.decode("gbk")
+            except UnicodeDecodeError:
+                raise HTTPException(status_code=400, detail="文件编码仅支持 UTF-8 或 GBK")
+
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+        if reader.fieldnames is None:
+            raise HTTPException(status_code=400, detail="CSV 文件缺少标题行或文件为空")
+        if required_col not in reader.fieldnames:
+            raise HTTPException(status_code=400, detail="文件缺少 username 列")
+        rows = list(reader)
 
     created, updated = 0, 0
     default_role = "admin"
@@ -1389,18 +1421,30 @@ async def import_users(file: UploadFile = File(...), db: pymysql.connections.Con
     updated_items = []
     try:
         cursor = db.cursor()
-        for row in reader:
-            username = (row.get("username") or "").strip()
+        for row in rows:
+            # 核心修复4：增强safe_get_str，彻底避免int/float类型strip报错
+            def safe_get_str(key):
+                val = row.get(key)
+                if val is None or pd.isna(val):
+                    return ""
+                # 统一转字符串，彻底避免类型错误
+                s = str(val)
+                return s.strip()
+            
+            username = safe_get_str("username")
             if not username:
                 continue
-            user_type = _normalize_user_type(row.get("user_type") or "admin")
+            
+            user_type_val = safe_get_str("user_type") or "admin"
+            user_type = _normalize_user_type(user_type_val)
             info = USER_TABLES[user_type]
             table = info["table"]
-            phone = (row.get("phone") or None) and row.get("phone").strip()
-            email = (row.get("email") or None) and row.get("email").strip()
-            full_name = (row.get("full_name") or None) and row.get("full_name").strip()
-            role = (row.get("role") or default_role).strip() or default_role
-            password = (row.get("password") or default_password).strip() or default_password
+            phone_val = safe_get_str("phone")
+            phone = phone_val if phone_val else None
+            email = "string"
+            full_name = safe_get_str("full_name")
+            role = safe_get_str("role") or default_role
+            password = safe_get_str("password") or default_password
             password_hash = get_password_hash(password)
             if not full_name:
                 full_name = username  # 默认使用username作为full_name
@@ -1488,6 +1532,118 @@ async def import_users(file: UploadFile = File(...), db: pymysql.connections.Con
         if cursor:
             cursor.close()
 
+@router.get(
+    "/all",
+    summary="查询所有用户",
+    description="管理员查询学生、教师或管理员表中的所有人的信息，支持三选一或查询全部"
+)
+def get_all_users(
+    user_type: Optional[str] = Query(None, description="用户类型：student/teacher/admin，不指定则查询全部"),
+    db: pymysql.connections.Connection = Depends(get_db),
+    current_user: Optional[str] = Query(None, description="管理员信息(JSON字符串，包含 sub/username/roles)"),
+):
+    # 解析当前用户信息
+    current_user_info = _parse_current_user(current_user)
+    # 验证当前用户是管理员
+    user_roles = current_user_info.get("roles", [])
+    if "admin" not in user_roles and "管理员" not in user_roles:
+        raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
+    
+    cursor = None
+    try:
+        cursor = db.cursor(pymysql.cursors.DictCursor)
+        
+        # 构建查询
+        results = []
+        
+        # 如果指定了用户类型，只查询对应表
+        if user_type:
+            user_type = _normalize_user_type(user_type)
+            info = USER_TABLES[user_type]
+            table = info["table"]
+            id_col = info["id_col"]
+            
+            if user_type == "admin":
+                cursor.execute(f"""
+                    SELECT 
+                        {id_col} as user_id, 
+                        name,
+                        created_at,
+                        updated_at
+                    FROM {table}
+                """)
+            else:
+                cursor.execute(f"""
+                    SELECT 
+                        {id_col} as user_id, 
+                        name,
+                        created_at,
+                        updated_at
+                    FROM {table}
+                """)
+            
+            rows = cursor.fetchall()
+            for row in rows:
+                row["user_type"] = user_type
+                # 转换日期时间格式
+                if "created_at" in row and row["created_at"]:
+                    if isinstance(row["created_at"], datetime):
+                        row["created_at"] = row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+                if "updated_at" in row and row["updated_at"]:
+                    if isinstance(row["updated_at"], datetime):
+                        row["updated_at"] = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S")
+                results.append(row)
+        else:
+            # 查询所有三个表
+            for ut in ["student", "teacher", "admin"]:
+                info = USER_TABLES[ut]
+                table = info["table"]
+                id_col = info["id_col"]
+                
+                if ut == "admin":
+                    cursor.execute(f"""
+                        SELECT 
+                            {id_col} as user_id, 
+                            name,
+                            created_at,
+                            updated_at
+                        FROM {table}
+                    """)
+                else:
+                    cursor.execute(f"""
+                        SELECT 
+                            {id_col} as user_id, 
+                            name,
+                            created_at,
+                            updated_at
+                        FROM {table}
+                    """)
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    row["user_type"] = ut
+                    # 转换日期时间格式
+                    if "created_at" in row and row["created_at"]:
+                        if isinstance(row["created_at"], datetime):
+                            row["created_at"] = row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+                    if "updated_at" in row and row["updated_at"]:
+                        if isinstance(row["updated_at"], datetime):
+                            row["updated_at"] = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S")
+                    results.append(row)
+        
+        return {
+            "code": 200,
+            "message": "查询成功",
+            "data": results
+        }
+    except HTTPException:
+        raise
+    except pymysql.MySQLError as e:
+        logger.error(f"查询所有用户数据库错误: {str(e)}")
+        raise HTTPException(status_code=500, detail="查询所有用户失败")
+    finally:
+        if cursor:
+            cursor.close()
 
 @router.put(
     "/{user_id}/bind-phone",
@@ -1863,3 +2019,4 @@ def change_user_role(
     finally:
         if cursor:
             cursor.close()
+
