@@ -4,6 +4,7 @@ import aiohttp
 import os
 import sqlite3
 from datetime import datetime
+from urllib.parse import quote
 import pymysql
 
 from app.database import get_db
@@ -96,6 +97,7 @@ async def submit_audit(
             file_path = os.path.join(UPLOADS_DIR, file.filename)
             with open(file_path, "wb") as f:
                 f.write(content)
+            uploaded_file_url = f"{UPLOADS_MOUNT_PATH}/{quote(file.filename)}"
             result = await submit_audit_task(
                 db,
                 file_content=content,
@@ -125,6 +127,7 @@ async def submit_audit(
             "version": version,
             "mysql_inserted": mysql_inserted,
             "file_url": f"{UPLOADS_MOUNT_PATH}/task_{task_id}.zip",
+            "uploaded_file_url": uploaded_file_url if file else None,
         }
         
     except HTTPException:
