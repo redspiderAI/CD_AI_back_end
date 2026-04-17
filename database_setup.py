@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS `students` (
     KEY `idx_student_email` (`email`),
     KEY `idx_student_school_id` (`school_id`),
     KEY `idx_student_department_id` (`department_id`),
-    KEY `idx_student_group_id` (`group_id`)
+    KEY `idx_student_group_id` (`group_id`),
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='学生信息表';
 """
 
@@ -122,6 +122,25 @@ CREATE TABLE IF NOT EXISTS `teachers` (
     KEY `idx_teacher_department_id` (`department_id`),
     KEY `idx_teacher_group_id` (`group_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='教师信息表';
+"""
+
+USER_AGENT_PERMISSIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS `user_agent_permissions` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键ID',
+    `student_id` VARCHAR(20) NOT NULL COMMENT '学生学号（关联students表的student_id）',
+    `admin_id` VARCHAR(64) NOT NULL COMMENT '管理员ID（关联admins表的admin_id）',
+    `agent_permission` TINYINT NOT NULL DEFAULT 0 COMMENT '智能体使用权限，0-无权限，1-有权限',
+    `granted_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '赋予权限的时间',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '记录更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uniq_student` (`student_id`),
+    KEY `idx_admin_id` (`admin_id`),
+    KEY `idx_agent_permission` (`agent_permission`),
+    KEY `idx_granted_at` (`granted_at`),
+    CONSTRAINT `fk_user_agent_permission_student` FOREIGN KEY (`student_id`) REFERENCES `students` (`student_id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_user_agent_permission_admin` FOREIGN KEY (`admin_id`) REFERENCES `admins` (`admin_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户智能体使用权限表';
 """
 
 ADMINS_TABLE_SQL = """
@@ -434,6 +453,7 @@ def init_db(database_url: str | None = None) -> None:
                 STUDENTS_TABLE_SQL,
                 TEACHERS_TABLE_SQL,
                 ADMINS_TABLE_SQL,
+                USER_AGENT_PERMISSIONS_TABLE_SQL,
                 FILE_RECORDS_TABLE_SQL,
                 GROUPS_TABLE_SQL,
                 GROUP_MEMBERS_TABLE_SQL,
@@ -817,6 +837,7 @@ def sync_schema(database_url: str | None = None) -> None:
                 STUDENTS_TABLE_SQL,
                 TEACHERS_TABLE_SQL,
                 ADMINS_TABLE_SQL,
+                USER_AGENT_PERMISSIONS_TABLE_SQL,
                 FILE_RECORDS_TABLE_SQL,
                 GROUPS_TABLE_SQL,
                 GROUP_MEMBERS_TABLE_SQL,

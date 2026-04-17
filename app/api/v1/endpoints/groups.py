@@ -1650,11 +1650,12 @@ async def batch_download_papers(
 
 @router.post(
     "/download/selected",
-    summary="选择下载论文",
-    description="管理员或老师通过指定论文ID列表选择下载论文，格式为zip"
+    summary="选择下载论文及附件",
+    description="管理员或老师通过指定论文ID列表选择下载论文，格式为zip，可选择是否包含附件"
 )
 async def selected_download_papers(
     paper_ids: str = Query(..., description="论文ID列表，用英文逗号分隔，例如: 1,2,3,4,5"),
+    include_attachments: bool = Query(False, description="是否包含附件，默认为false"),
     current_user: Optional[str] = Query(None, description="当前登录用户信息(JSON字符串)，示例: {\"sub\":1,\"roles\":[\"admin\"],\"username\":\"admin\"}")
 ):
     """选择下载论文的实现"""
@@ -1684,6 +1685,7 @@ async def selected_download_papers(
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for paper in papers_to_download:
+                # 下载论文文件
                 oss_key = paper.get('oss_key')
                 if oss_key:
                     try:
@@ -1695,6 +1697,37 @@ async def selected_download_papers(
                     except Exception as e:
                         logger.error(f"获取论文文件失败: {str(e)}")
                         # 跳过失败的文件，继续处理其他文件
+                
+                # 如果需要下载附件
+                if include_attachments:
+                    paper_id = paper.get('paper_id')
+                    if paper_id:
+                        try:
+                            # 查询该论文的所有附件
+                            cursor.execute("""
+                                SELECT filename, storage_path 
+                                FROM file_records 
+                                WHERE paper_id = %s
+                            """, (paper_id,))
+                            attachments = cursor.fetchall()
+                            
+                            for attachment in attachments:
+                                attachment_filename = attachment.get('filename')
+                                storage_path = attachment.get('storage_path')
+                                if attachment_filename and storage_path:
+                                    try:
+                                        # 从 OSS 获取附件文件
+                                        # 注意：storage_path 可能已经是完整的 OSS key
+                                        attach_filename, attach_content = get_file_from_oss(storage_path)
+                                        # 构建附件文件路径
+                                        student_info = f"{paper.get('student_name')}_{paper.get('student_number')}"
+                                        zip_file.writestr(f"{student_info}/附件/{attach_filename}", attach_content)
+                                    except Exception as e:
+                                        logger.error(f"获取附件文件失败: {str(e)}")
+                                        # 跳过失败的附件，继续处理其他附件
+                        except Exception as e:
+                            logger.error(f"查询附件失败: {str(e)}")
+                            # 跳过失败的查询，继续处理其他论文
         
         # 重置文件指针到开始位置
         zip_buffer.seek(0)
