@@ -231,9 +231,9 @@ def list_groups(
                 (
                     SELECT COUNT(DISTINCT p.id)
                     FROM papers p
-                    WHERE p.owner_id IN (
-                        SELECT member_id FROM group_members WHERE group_id = g.group_id AND member_type='student' AND is_active=1
-                    )
+                    JOIN students s ON s.id = p.owner_id
+                    JOIN group_members gm ON gm.member_id = s.id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS paper_count
             FROM `groups` g
             WHERE (g.group_id LIKE %s OR g.group_name LIKE %s)
@@ -287,9 +287,9 @@ def list_groups(
                 (
                     SELECT COUNT(DISTINCT p.id)
                     FROM papers p
-                    WHERE p.owner_id IN (
-                        SELECT member_id FROM group_members WHERE group_id = g.group_id AND member_type='student' AND is_active=1
-                    )
+                    JOIN students s ON s.id = p.owner_id
+                    JOIN group_members gm ON gm.member_id = s.id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS paper_count
             FROM `groups` g
             WHERE EXISTS (
