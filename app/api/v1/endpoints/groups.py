@@ -217,14 +217,23 @@ def list_groups(
                 g.created_at,
                 g.updated_at,
                 (
-                    SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
+                    SELECT COUNT(DISTINCT gm.member_id)
+                    FROM group_members gm
+                    JOIN students s ON s.id = gm.member_id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS student_count,
+                (
+                    SELECT COUNT(DISTINCT gm.member_id)
+                    FROM group_members gm
+                    JOIN teachers t ON t.id = gm.member_id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='teacher' AND gm.is_active=1
+                ) AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT p.id)
                     FROM papers p
-                    WHERE p.owner_id IN (
-                        SELECT member_id FROM group_members WHERE group_id = g.group_id AND member_type='student' AND is_active=1
-                    )
+                    JOIN students s ON s.id = p.owner_id
+                    JOIN group_members gm ON gm.member_id = s.id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS paper_count
             FROM `groups` g
             WHERE (g.group_id LIKE %s OR g.group_name LIKE %s)
@@ -264,14 +273,23 @@ def list_groups(
                 g.created_at,
                 g.updated_at,
                 (
-                    SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
+                    SELECT COUNT(DISTINCT gm.member_id)
+                    FROM group_members gm
+                    JOIN students s ON s.id = gm.member_id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS student_count,
+                (
+                    SELECT COUNT(DISTINCT gm.member_id)
+                    FROM group_members gm
+                    JOIN teachers t ON t.id = gm.member_id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='teacher' AND gm.is_active=1
+                ) AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT p.id)
                     FROM papers p
-                    WHERE p.owner_id IN (
-                        SELECT member_id FROM group_members WHERE group_id = g.group_id AND member_type='student' AND is_active=1
-                    )
+                    JOIN students s ON s.id = p.owner_id
+                    JOIN group_members gm ON gm.member_id = s.id
+                    WHERE gm.group_id = g.group_id AND gm.member_type='student' AND gm.is_active=1
                 ) AS paper_count
             FROM `groups` g
             WHERE EXISTS (
@@ -307,6 +325,7 @@ def list_groups(
                 "group_name": row["group_name"],
                 "description": row.get("description"),
                 "student_count": int(row.get("student_count", 0) or 0),
+                "teacher_count": int(row.get("teacher_count", 0) or 0),
                 "paper_count": int(row.get("paper_count", 0) or 0),
                 "created_at": row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
                 "updated_at": row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None,
@@ -410,8 +429,13 @@ async def import_groups(
                         has_all_required = False
                         break
                 if has_all_required:
+                    group_id_str = str(row_dict["群组编号"]) if row_dict["群组编号"] is not None else ""
+                    # 验证群组编号只能是数字
+                    if not group_id_str.isdigit():
+                        logger.warning(f"第{index+2}行群组编号 {group_id_str} 包含非数字字符，跳过该行")
+                        continue
                     import_data.append({
-                        "group_id": str(row_dict["群组编号"]) if row_dict["群组编号"] is not None else "",
+                        "group_id": group_id_str,
                         "group_name": str(row_dict["群组名称"]) if row_dict["群组名称"] is not None else "",
                         "teacher_id": str(row_dict["教师工号"]) if row_dict["教师工号"] is not None else "",
                         "student_id": str(row_dict["学生学号"]) if row_dict["学生学号"] is not None else "",
@@ -451,8 +475,13 @@ async def import_groups(
                 row_dict = dict(zip(headers, row_values))
 
                 if all([row_dict.get(col) for col in required_cols]):
+                    group_id_str = row_dict["群组编号"]
+                    # 验证群组编号只能是数字
+                    if not group_id_str.isdigit():
+                        logger.warning(f"第{line_num}行群组编号 {group_id_str} 包含非数字字符，跳过该行")
+                        continue
                     import_data.append({
-                        "group_id": row_dict["群组编号"],
+                        "group_id": group_id_str,
                         "group_name": row_dict["群组名称"],
                         "teacher_id": row_dict["教师工号"],
                         "student_id": row_dict["学生学号"],
@@ -572,7 +601,12 @@ async def create_group(
         _ensure_caller_identity(cursor, cu)
 
         group_id_value = (group_id or "").strip() or None
-        if not group_id_value:
+        if group_id_value:
+            # 验证群组编号只能是数字
+            if not group_id_value.isdigit():
+                raise HTTPException(status_code=400, detail="群组编号只能包含数字")
+        else:
+            # 自动生成群组编号
             cursor.execute(
                 "SELECT MAX(CAST(`group_id` AS UNSIGNED)) FROM `groups` WHERE `group_id` REGEXP '^[0-9]+$'"
             )
@@ -997,22 +1031,39 @@ async def remove_group_member(
         _require_group_exists(cursor, group_id)
         _require_group_teacher_or_admin(cursor, cu, group_id, "只有教师或管理员可移除成员")
 
+        # normalize input values
+        if student_id is not None:
+            student_id = student_id.strip()
+        if teacher_id is not None:
+            teacher_id = teacher_id.strip()
+        if admin_id is not None:
+            admin_id = admin_id.strip()
+
         # 获取成员内部ID
         if member_type == "student":
             cursor.execute("SELECT `id` FROM `students` WHERE `student_id` = %s", (student_id,))
             member_row = cursor.fetchone()
+            if not member_row and student_id and student_id.isdigit():
+                cursor.execute("SELECT `id` FROM `students` WHERE `id` = %s", (student_id,))
+                member_row = cursor.fetchone()
             if not member_row:
                 raise HTTPException(status_code=404, detail=f"学生学号 {student_id} 不存在")
             member_id = member_row[0]
         elif member_type == "teacher":
             cursor.execute("SELECT `id` FROM `teachers` WHERE `teacher_id` = %s", (teacher_id,))
             member_row = cursor.fetchone()
+            if not member_row and teacher_id and teacher_id.isdigit():
+                cursor.execute("SELECT `id` FROM `teachers` WHERE `id` = %s", (teacher_id,))
+                member_row = cursor.fetchone()
             if not member_row:
                 raise HTTPException(status_code=404, detail=f"教师工号 {teacher_id} 不存在")
             member_id = member_row[0]
         else:  # admin
             cursor.execute("SELECT `id` FROM `admins` WHERE `admin_id` = %s", (admin_id,))
             member_row = cursor.fetchone()
+            if not member_row and admin_id and admin_id.isdigit():
+                cursor.execute("SELECT `id` FROM `admins` WHERE `id` = %s", (admin_id,))
+                member_row = cursor.fetchone()
             if not member_row:
                 raise HTTPException(status_code=404, detail=f"管理员账号 {admin_id} 不存在")
             member_id = member_row[0]
@@ -1922,5 +1973,6 @@ def get_unuploaded_paper_members(
         if cursor:
             cursor.close()
         conn.close()
+
 
 
